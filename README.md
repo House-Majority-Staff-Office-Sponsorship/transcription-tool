@@ -1,1 +1,2 @@
 # transcription-tool
+Overview: A  pipeline that downloads videos from a specified YouTube channel, transcribes the audio to text, classifies by committee and stores organized transcripts in the database/file system. The pipeline ("Transcription tool") would serve as a universally used service that would ensure that legislative proceedings are searchable and accessible from a central source. The tool's goal is to automate translating hours of video into a searchable, plain-text record for everyone from legislative staff to local constituents.
