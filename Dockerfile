@@ -12,4 +12,4 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . /app
 ENV PYTHONPATH=/app/src
 
-CMD ["python", "-m", "transcription_tool"]
+CMD ["python", "-m", "transcription-tool"]
