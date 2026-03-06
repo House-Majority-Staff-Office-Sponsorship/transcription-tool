@@ -1,2 +1,3 @@
 python-dotenv
 google-api-python-client==2.118.0
+yt-dlp
