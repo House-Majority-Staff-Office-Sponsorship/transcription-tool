@@ -6,7 +6,6 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONPATH=/app/src
-ENV LD_LIBRARY_PATH=/usr/local/cuda/lib64:/usr/local/nvidia/lib:/usr/local/nvidia/lib64:${LD_LIBRARY_PATH}
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
@@ -21,5 +20,7 @@ RUN python3 -m pip install --no-cache-dir --upgrade pip && \
     python3 -m pip install --no-cache-dir -r /app/requirements.txt
 
 COPY . /app
+COPY entryPoint.sh /app/entryPoint.sh
+RUN chmod +x /app/entryPoint.sh
 
 CMD ["python3", "-m", "transcription_tool"]
