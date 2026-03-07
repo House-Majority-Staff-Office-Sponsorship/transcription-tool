@@ -1,8 +1,10 @@
 #Uncomment to try pulling data from YouTube
-from src.transcription_tool.getUploads import main
-from src.transcription_tool.download_audio import process_pending_videos
+# from src.transcription_tool.getUploads import main
+# from src.transcription_tool.download_audio import process_pending_videos
+from src.transcription_tool.transcribe_driver import main
 # def main():
 #     print("transcription_tool: project scaffold OK")
 
 if __name__ == "__main__":
-    process_pending_videos()
+    #process_pending_videos()
+    main()

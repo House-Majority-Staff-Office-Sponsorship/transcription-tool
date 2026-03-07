@@ -1,3 +1,5 @@
 python-dotenv
 google-api-python-client==2.118.0
 yt-dlp
+faster-whisper==1.1.0
+ctranslate2==4.6.0
