@@ -161,7 +161,7 @@ def getNewVideos():
     # Load last seen state
     state = load_json(STATE_FILE)
     last_seen = state.get(channel_id, {}).get("last_seen_video_id")
-    max_videos = os.environ.get("MAX_VIDEOS")
+    max_videos = int(os.environ.get("MAX_VIDEOS"))
     # Poll for new video IDs
     new_video_ids = poll_uploads_playlist_for_new_video_ids(
         youtube,

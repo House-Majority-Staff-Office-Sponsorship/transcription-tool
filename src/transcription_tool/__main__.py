@@ -7,7 +7,7 @@ from src.db.init_db import start_db
 from dotenv import load_dotenv
 
 load_dotenv()
-POLL_INTERVAL_SECONDS = os.environ.get("POLL_INTERVAL_SECONDS")
+POLL_INTERVAL_SECONDS = float(os.environ.get("POLL_INTERVAL_SECONDS"))
 
 def main():
     start_db()

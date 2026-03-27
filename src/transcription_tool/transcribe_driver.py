@@ -424,8 +424,8 @@ def transcribe_driver() -> None:
     process_downloaded_videos(
         processed_json_path=PROCESSED_FILE,
         testing_dir=TESTING_DIR,
-        chunk_seconds=os.environ.get("CHUNK_SECONDS"),
-        overlap_seconds=os.environ.get("OVERLAP_SECONDS"),
+        chunk_seconds=int(os.environ.get("CHUNK_SECONDS")),
+        overlap_seconds=int(os.environ.get("OVERLAP_SECONDS")),
         model_size= os.environ.get("MODEL_SIZE"),
         device=os.environ.get("DEVICE"),
         compute_type= os.environ.get("COMPUTE_TYPE"),
