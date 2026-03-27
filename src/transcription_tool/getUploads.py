@@ -34,7 +34,7 @@ def get_uploads_playlist_id(youtube, channel_id: str)-> str:
         raise ValueError("No channel found for given channel id")
     return items[0]["contentDetails"]["relatedPlaylists"]["uploads"]
 
-#add new videos to pending videos file without and duplicates
+#add new videos to pending videos file without duplicates
 def append_new_videos_to_queue(videos: list[dict]):
     queue = load_json(PENDING_VIDEOS_FILE)
 
@@ -145,7 +145,7 @@ def fetch_video_metadata(youtube, video_ids: list[str]) -> list[dict]:
     return resp.get("items", [])
 
 
-def main():
+def getNewVideos():
 
     load_dotenv()
     api_key = os.environ.get("YOUTUBE_API_KEY")
@@ -153,8 +153,6 @@ def main():
         raise RuntimeError("Youtube API key is not set check the .env variables")
 
     youtube = build("youtube", "v3", developerKey=api_key)
-    #The channel ID is UCvoLAX1ww3e63K8qQ5of0bw, 
-    # its not sensitive info its just stored in .env for organization
     channel_id = os.environ.get("CHANNEL_ID")
 
     uploads_playlist_id = get_or_fetch_uploads_playlist_id(youtube, channel_id)
@@ -163,13 +161,13 @@ def main():
     # Load last seen state
     state = load_json(STATE_FILE)
     last_seen = state.get(channel_id, {}).get("last_seen_video_id")
-
+    max_videos = os.environ.get("MAX_VIDEOS")
     # Poll for new video IDs
     new_video_ids = poll_uploads_playlist_for_new_video_ids(
         youtube,
         uploads_playlist_id=uploads_playlist_id,
         last_seen_video_id=last_seen,
-        max_results=50,
+        max_results=max_videos,
     )
 
     if not new_video_ids:

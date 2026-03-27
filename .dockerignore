@@ -1,0 +1,12 @@
+.git
+__pycache__/
+*.pyc
+.venv/
+venv/
+env/
+tempdata/
+data/
+testing/
+*.db
+.ipynb_checkpoints/
+*.ipynb

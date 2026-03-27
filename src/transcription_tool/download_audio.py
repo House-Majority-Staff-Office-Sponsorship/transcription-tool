@@ -33,14 +33,21 @@ def ensure_dirs() -> None:
 def load_json_list(path: Path) -> list[dict[str, Any]]:
     if not path.exists():
         return []
-    with path.open("r", encoding="utf-8") as f:
-        data = json.load(f)
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            text = f.read().strip()
+        if not text:
+            return []
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        return []
     if not isinstance(data, list):
         raise ValueError(f"{path} must contain a JSON list.")
     return data
 
 
 def save_json_list(path: Path, data: list[dict[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
 
@@ -103,13 +110,13 @@ def download_audio(video_id: str, classification: str) -> Path:
     output_dir = AUDIO_DIR / classification
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    output_path = output_dir / f"{video_id}.mp3"
+    output_path = output_dir / f"{video_id}.wav"
     url = build_youtube_url(video_id)
 
     cmd = [
         "yt-dlp",
         "-x",
-        "--audio-format", "mp3",
+        "--audio-format", "wav",
         "--audio-quality", "0",
         "-o", str(output_dir / f"{video_id}.%(ext)s"),
         url,

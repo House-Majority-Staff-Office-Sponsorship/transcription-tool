@@ -20,7 +20,7 @@ RUN python3 -m pip install --no-cache-dir --upgrade pip && \
     python3 -m pip install --no-cache-dir -r /app/requirements.txt
 
 COPY . /app
-COPY entryPoint.sh /app/entryPoint.sh
+COPY src/transcription_tool/entryPoint.sh /app/entryPoint.sh
 RUN chmod +x /app/entryPoint.sh
 
 CMD ["python3", "-m", "transcription_tool"]

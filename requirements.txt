@@ -5,3 +5,4 @@ faster-whisper==1.1.0
 ctranslate2==4.6.0
 nvidia-cublas-cu12
 nvidia-cudnn-cu12==9.*
+SQLAlchemy>=2.0

@@ -1,14 +1,19 @@
 
 from __future__ import annotations
 
-import argparse
+import os
 import json
-import math
 import shutil
 import subprocess
+import re
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Any
+from db.repository import ingest_transcript_json
+from db.session import SessionLocal
+from db.models import Video, Transcript, TranscriptSegment, TranscriptChunk
+from sqlalchemy import select, func
+from dotenv import load_dotenv
 
 try:
     from faster_whisper import WhisperModel
@@ -24,6 +29,11 @@ PROCESSED_FILE = DATA_DIR / "processed_videos.json"
 FAILED_FILE = DATA_DIR / "failed_downloads.json"
 AUDIO_DIR = DATA_DIR / "audio"
 TESTING_DIR = DATA_DIR / "testing"
+
+OUTPUT_DIR = Path("data")
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+
 # ----------------------------
 # Data containers
 # ----------------------------
@@ -80,6 +90,36 @@ def get_audio_duration_seconds(audio_path: Path) -> float:
             f"ffprobe output was: {result.stdout!r}"
         ) from exc
 
+def remove_video_from_json(json_path: str | Path, video_id: str) -> bool:
+    json_path = Path(json_path)
+
+    if not json_path.exists():
+        raise FileNotFoundError(f"JSON file not found: {json_path}")
+
+    # Load existing data
+    with json_path.open("r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    if not isinstance(data, list):
+        raise ValueError("Expected JSON file to contain a list")
+
+    original_length = len(data)
+
+    # Filter out the video
+    data = [item for item in data if item.get("video_id") != video_id]
+
+    removed = len(data) < original_length
+
+    # Safe write (write to temp file first)
+    tmp_path = json_path.with_suffix(".tmp")
+
+    with tmp_path.open("w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
+
+    tmp_path.replace(json_path)
+
+    return removed
+
 
 def make_audio_chunks(
     audio_path: Path,
@@ -110,7 +150,7 @@ def make_audio_chunks(
     index = 0
     while start < duration:
         end = min(start + chunk_seconds, duration)
-        chunk_path = output_dir / f"chunk_{index:04d}_{int(start):07d}s.mp3"
+        chunk_path = output_dir / f"chunk_{index:04d}_{int(start):07d}s.wav"
 
         cmd = [
             "ffmpeg",
@@ -122,10 +162,12 @@ def make_audio_chunks(
             "-t",
             f"{end - start:.3f}",
             "-vn",
-            "-acodec",
-            "libmp3lame",
-            "-q:a",
-            "2",
+            "-ac",
+            "1",
+            "-ar",
+            "16000",
+            "-c:a",
+            "pcm_s16le",
             str(chunk_path),
         ]
         _run(cmd)
@@ -165,7 +207,7 @@ def transcribe_chunk(
     """
     segments, info = model.transcribe(
         str(chunk_path),
-        vad_filter=True,
+        vad_filter=False,
         beam_size=5,
     )
 
@@ -293,10 +335,14 @@ def process_downloaded_videos(
             "segments": merged_segments,
             "chunks": [asdict(r) for r in all_results],
         }
+        safe_title = sanitize_filename(video.get("title"))
+        file_stem = f"{safe_title} [{video_id}]"
 
-        full_json_path = video_dir / f"{video_id}_transcript.json"
-        full_txt_path = video_dir / f"{video_id}_transcript.txt"
-
+        full_json_path = OUTPUT_DIR / "transcripts" / video.get("classification") / f"{file_stem}.json"
+        full_txt_path = OUTPUT_DIR / "transcripts" / video.get("classification") / f"{file_stem}.txt"
+        full_txt_path.parent.mkdir(parents=True, exist_ok=True)
+        full_json_path.parent.mkdir(parents=True, exist_ok=True)
+        
         with full_json_path.open("w", encoding="utf-8") as f:
             json.dump(full_json, f, indent=2, ensure_ascii=False)
 
@@ -306,65 +352,83 @@ def process_downloaded_videos(
         print(f"Saved transcript JSON: {full_json_path}")
         print(f"Saved transcript TXT : {full_txt_path}")
 
+        print("Writing to database")
+
+        if not full_json_path.exists():
+            print(f"File not found: {full_json_path}")
+            raise SystemExit(1)
+        try:
+            with SessionLocal() as session:
+                video_db_id, action = ingest_transcript_json(session, full_json_path)
+
+            print(f"{action.title()} transcript successfully. video row id = {video_db_id}")
+            
+            with SessionLocal() as session:
+                video_count = session.scalar(select(func.count()).select_from(Video))
+                transcript_count = session.scalar(select(func.count()).select_from(Transcript))
+                segment_count = session.scalar(select(func.count()).select_from(TranscriptSegment))
+                chunk_count = session.scalar(select(func.count()).select_from(TranscriptChunk))
+
+                print("videos:", video_count)
+                print("transcripts:", transcript_count)
+                print("segments:", segment_count)
+                print("chunks:", chunk_count)
+            testing_dir = TESTING_DIR / f"{video_id}"
+            if testing_dir.exists():
+                shutil.rmtree(testing_dir)
+                print(f"Deleted testing directory: {testing_dir}")
+            
+            if audio_path.exists():
+                audio_path.unlink()
+                print(f"Deleted audio file: {audio_path}")
+
+            removed = remove_video_from_json(PROCESSED_FILE, video_id)
+        except Exception as exc:
+            print(f"Database ingest failed for {full_json_path}: {exc}")
+            raise
+
+
+
+
     print("\nDone.")
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Chunk downloaded audio files and transcribe them with faster-whisper."
-    )
-    parser.add_argument(
-        "--processed-json",
-        type=Path,
-        default=Path("tempdata/processed_videos.json"),
-        help="Path to the processed videos JSON file.",
-    )
-    parser.add_argument(
-        "--testing-dir",
-        type=Path,
-        default=Path("tempdata/testing"),
-        help="Directory where test chunks and transcripts will be written.",
-    )
-    parser.add_argument(
-        "--chunk-seconds",
-        type=int,
-        default=600,
-        help="Chunk size in seconds. Default: 600 (10 minutes).",
-    )
-    parser.add_argument(
-        "--overlap-seconds",
-        type=int,
-        default=5,
-        help="Overlap between chunks in seconds. Default: 5.",
-    )
-    parser.add_argument(
-        "--model-size",
-        type=str,
-        default="small",
-        help="faster-whisper model size, e.g. tiny, base, small, medium, large-v3.",
-    )
-    parser.add_argument(
-        "--device",
-        type=str,
-        default="auto",
-        help="Device for faster-whisper: auto, cpu, or cuda.",
-    )
-    parser.add_argument(
-        "--compute-type",
-        type=str,
-        default="int8",
-        help="Compute type for faster-whisper, e.g. int8, int8_float16, float16, float32.",
-    )
-    
 
+def sanitize_filename(title: str) -> str:
+    # Replace invalid characters with underscore
+    sanitized = re.sub(r'[<>:"/\\|?*]', '_', title)
+
+    # Remove newlines and tabs
+    sanitized = sanitized.replace('\n', ' ').replace('\r', ' ').replace('\t', ' ')
+
+    # Collapse multiple spaces into one
+    sanitized = re.sub(r'\s+', ' ', sanitized)
+
+    # Strip leading/trailing whitespace
+    sanitized = sanitized.strip()
+
+    # Remove trailing dots or spaces (Windows issue)
+    sanitized = sanitized.rstrip(' .')
+
+    return sanitized
+
+
+def transcribe_driver() -> None:
+    # Model configurations avalible in .env, see .env.example
+    # Chunk size in seconds. Default: 600 (10 minutes).
+    # Overlap between chunks in seconds. Default: 5.
+    # faster-whisper model size, e.g. tiny, base, small, medium, large-v3. Default: small
+    # Device for faster-whisper: auto, cpu, or cuda. Default: Cuda, change to auto if no GPU
+    # Compute type for faster-whisper, e.g. int8, int8_float16, float16, float32. Default: int8
+    os.environ.get("CHANNEL_ID")
     process_downloaded_videos(
         processed_json_path=PROCESSED_FILE,
         testing_dir=TESTING_DIR,
-        chunk_seconds=600,
-        overlap_seconds=5,
-        model_size= "small",
-        device="cuda",
-        compute_type= "int8_float16",
+        chunk_seconds=os.environ.get("CHUNK_SECONDS"),
+        overlap_seconds=os.environ.get("OVERLAP_SECONDS"),
+        model_size= os.environ.get("MODEL_SIZE"),
+        device=os.environ.get("DEVICE"),
+        compute_type= os.environ.get("COMPUTE_TYPE"),
     )
 
 
