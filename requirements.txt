@@ -6,3 +6,5 @@ ctranslate2==4.6.0
 nvidia-cublas-cu12
 nvidia-cudnn-cu12==9.*
 SQLAlchemy>=2.0
+google-auth
+google-auth-oauthlib

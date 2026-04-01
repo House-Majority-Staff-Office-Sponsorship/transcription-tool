@@ -13,16 +13,18 @@ STATE_FILE = DATA_DIR / Path("youtube_state.json")
 PLAYLIST_CACHE_FILE = DATA_DIR / Path("youtube_playlist_cache.json")
 PENDING_VIDEOS_FILE = DATA_DIR / Path("pending_videos.json")
 
-#Helper functions for loading and saving data to a json file
-def load_json(path: Path) -> dict:
+
+def load_json(path: Path):
     if path.exists():
         return json.loads(path.read_text())
     return {}
 
-def save_json(path: Path, data: dict) -> None:
+
+def save_json(path: Path, data) -> None:
     path.write_text(json.dumps(data, indent=2))
 
-def get_uploads_playlist_id(youtube, channel_id: str)-> str:
+
+def get_uploads_playlist_id(youtube, channel_id: str) -> str:
     resp = youtube.channels().list(
         part="contentDetails",
         id=channel_id,
@@ -34,64 +36,6 @@ def get_uploads_playlist_id(youtube, channel_id: str)-> str:
         raise ValueError("No channel found for given channel id")
     return items[0]["contentDetails"]["relatedPlaylists"]["uploads"]
 
-#add new videos to pending videos file without duplicates
-def append_new_videos_to_queue(videos: list[dict]):
-    queue = load_json(PENDING_VIDEOS_FILE)
-
-    if not isinstance(queue, list):
-        queue = []
-
-    existing_ids = {v["video_id"] for v in queue if "video_id" in v}
-
-    new_entries = []
-
-    for v in videos:
-        vid = v["id"]
-
-        if vid in existing_ids:
-            continue
-
-        snippet = v.get("snippet", {})
-        content = v.get("contentDetails", {})
-        live = v.get("liveStreamingDetails", {})
-
-        entry = {
-            "video_id": vid,
-            "title": snippet.get("title"),
-            "published_at": snippet.get("publishedAt"),
-            "duration": content.get("duration"),
-            "live_status": snippet.get("liveBroadcastContent"),
-            "actual_start_time": live.get("actualStartTime"),
-            "actual_end_time": live.get("actualEndTime"),
-            "status": "pending"
-        }
-
-        new_entries.append(entry)
-
-    if new_entries:
-        queue.extend(new_entries)
-        save_json(PENDING_VIDEOS_FILE, queue)
-        print(f"Added {len(new_entries)} video(s) to pending_videos.json")
-    else:
-        print("No new videos added to queue")
-
-def list_uploads(youtube, uploads_playlist_id: str, page_token: str | None = None, max_results: int = 50):
-    resp = youtube.playlistItems().list(
-        part="snippet,contentDetails",
-        playlistId=uploads_playlist_id,
-        maxResults=max_results,
-        pageToken=page_token,
-    ).execute()
-
-    videos = []
-    for video in resp.get("items", []):
-        videos.append({
-            "video_id": video["contentDetails"]["videoId"],
-            "published_at": video["snippet"]["publishedAt"],
-            "title": video["snippet"]["title"],
-        })
-
-    return videos, resp.get("nextPageToken")
 
 def get_or_fetch_uploads_playlist_id(youtube, channel_id: str) -> str:
     cache = load_json(PLAYLIST_CACHE_FILE)
@@ -104,14 +48,14 @@ def get_or_fetch_uploads_playlist_id(youtube, channel_id: str) -> str:
     save_json(PLAYLIST_CACHE_FILE, cache)
     return uploads_id
 
-#Checks for new videos in the playlist list 
+
 def poll_uploads_playlist_for_new_video_ids(
     youtube,
     uploads_playlist_id: str,
     last_seen_video_id: Optional[str],
     max_results: int = 50,
 ) -> list[str]:
-    
+
     resp = youtube.playlistItems().list(
         part="contentDetails",
         playlistId=uploads_playlist_id,
@@ -127,11 +71,11 @@ def poll_uploads_playlist_for_new_video_ids(
             break
         new_ids.append(vid)
 
-    # playlistItems new->old reverse so we process oldest -> newest
+    # playlistItems are newest -> oldest, reverse so we process oldest -> newest
     new_ids.reverse()
     return new_ids
 
-#get the full metadata of our videos which we need to determine status and for future storage
+
 def fetch_video_metadata(youtube, video_ids: list[str]) -> list[dict]:
     if not video_ids:
         return []
@@ -145,9 +89,101 @@ def fetch_video_metadata(youtube, video_ids: list[str]) -> list[dict]:
     return resp.get("items", [])
 
 
-def getNewVideos():
+def build_queue_entry(v: dict) -> dict:
+    snippet = v.get("snippet", {})
+    content = v.get("contentDetails", {})
+    live = v.get("liveStreamingDetails", {})
 
+    return {
+        "video_id": v["id"],
+        "title": snippet.get("title"),
+        "published_at": snippet.get("publishedAt"),
+        "duration": content.get("duration"),
+        "live_status": snippet.get("liveBroadcastContent"),
+        "actual_start_time": live.get("actualStartTime"),
+        "actual_end_time": live.get("actualEndTime"),
+        "status": "pending",
+    }
+
+
+def upsert_videos_in_queue(videos: list[dict]):
+    queue = load_json(PENDING_VIDEOS_FILE)
+
+    if not isinstance(queue, list):
+        queue = []
+
+    queue_by_id = {
+        v["video_id"]: v
+        for v in queue
+        if isinstance(v, dict) and "video_id" in v
+    }
+
+    added = 0
+    updated = 0
+
+    for v in videos:
+        vid = v["id"]
+        new_entry = build_queue_entry(v)
+
+        if vid in queue_by_id:
+            old_entry = queue_by_id[vid]
+
+            old_live_status = old_entry.get("live_status")
+            new_live_status = new_entry.get("live_status")
+
+            # preserve any downstream processing status unless you want to reset it
+            new_entry["status"] = old_entry.get("status", "pending")
+
+            queue_by_id[vid] = new_entry
+            updated += 1
+
+            if old_live_status != new_live_status:
+                print(
+                    f"Updated live_status for {vid}: "
+                    f"{old_live_status} -> {new_live_status}"
+                )
+        else:
+            queue_by_id[vid] = new_entry
+            added += 1
+
+    new_queue = list(queue_by_id.values())
+    save_json(PENDING_VIDEOS_FILE, new_queue)
+
+    print(f"Queue updated: {added} added, {updated} refreshed")
+
+
+def refresh_pending_live_videos(youtube):
+    queue = load_json(PENDING_VIDEOS_FILE)
+
+    if not isinstance(queue, list):
+        queue = []
+
+    refresh_ids = []
+    for v in queue:
+        if not isinstance(v, dict):
+            continue
+
+        # only re-check videos that are still live/upcoming
+        live_status = v.get("live_status")
+        status = v.get("status", "pending")
+
+        # optional: only refresh entries that are still pending
+        if status == "pending" and live_status != "none":
+            refresh_ids.append(v["video_id"])
+
+    if not refresh_ids:
+        print("No pending live/upcoming videos to refresh.")
+        return
+
+    print(f"Refreshing {len(refresh_ids)} pending live/upcoming video(s):", refresh_ids)
+
+    refreshed_items = fetch_video_metadata(youtube, refresh_ids)
+    upsert_videos_in_queue(refreshed_items)
+
+
+def getNewVideos():
     load_dotenv()
+
     api_key = os.environ.get("YOUTUBE_API_KEY")
     if not api_key:
         raise RuntimeError("Youtube API key is not set check the .env variables")
@@ -158,11 +194,14 @@ def getNewVideos():
     uploads_playlist_id = get_or_fetch_uploads_playlist_id(youtube, channel_id)
     print("Uploads playlist:", uploads_playlist_id)
 
-    # Load last seen state
     state = load_json(STATE_FILE)
     last_seen = state.get(channel_id, {}).get("last_seen_video_id")
     max_videos = int(os.environ.get("MAX_VIDEOS"))
-    # Poll for new video IDs
+
+    # First: refresh old pending live/upcoming videos
+    refresh_pending_live_videos(youtube)
+
+    # Then: look for truly new videos since last_seen
     new_video_ids = poll_uploads_playlist_for_new_video_ids(
         youtube,
         uploads_playlist_id=uploads_playlist_id,
@@ -176,12 +215,11 @@ def getNewVideos():
 
     print(f"Found {len(new_video_ids)} new video(s):", new_video_ids)
 
-    # Fetch rich metadata
     items = fetch_video_metadata(youtube, new_video_ids)
 
-    append_new_videos_to_queue(items)
+    # add new ones, and if somehow already present, refresh them in place
+    upsert_videos_in_queue(items)
 
-    # Print a useful subset
     for v in items:
         vid = v["id"]
         sn = v.get("snippet", {})
@@ -198,16 +236,12 @@ def getNewVideos():
             sn.get("liveBroadcastContent"),
             "views=" + stats.get("viewCount", "NA"),
             "privacy=" + status.get("privacyStatus", "NA"),
-            "liveStart=" + live.get("actualStartTime", "NA"),
-            "liveEnd=" + live.get("actualEndTime", "NA"),
+            "liveStart=" + str(live.get("actualStartTime", "NA")),
+            "liveEnd=" + str(live.get("actualEndTime", "NA")),
         )
 
-    # Update last_seen to newest ID we just processed
-    # save our state for future useage. 
+    # keep last_seen meaning: newest playlist item we've already noticed
     newest_id = new_video_ids[-1]
     state.setdefault(channel_id, {})["last_seen_video_id"] = newest_id
     save_json(STATE_FILE, state)
     print("Updated last_seen_video_id:", newest_id)
-
-
-

@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 import os
@@ -8,12 +7,18 @@ import subprocess
 import re
 from dataclasses import dataclass, asdict
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from db.repository import ingest_transcript_json
 from db.session import SessionLocal
 from db.models import Video, Transcript, TranscriptSegment, TranscriptChunk
 from sqlalchemy import select, func
 from dotenv import load_dotenv
+from google.auth.transport.requests import Request
+from google.oauth2 import service_account
+from google.oauth2.credentials import Credentials as UserCredentials
+from google_auth_oauthlib.flow import InstalledAppFlow
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaFileUpload
 
 try:
     from faster_whisper import WhisperModel
@@ -33,10 +38,9 @@ TESTING_DIR = DATA_DIR / "testing"
 OUTPUT_DIR = Path("data")
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
+DRIVE_SCOPES = ["https://www.googleapis.com/auth/drive.file"]
+AuthMode = Literal["oauth", "service_account"]
 
-# ----------------------------
-# Data containers
-# ----------------------------
 
 @dataclass
 class ChunkResult:
@@ -48,9 +52,7 @@ class ChunkResult:
     segments: list[dict[str, Any]]
 
 
-# ----------------------------
-# FFmpeg helpers
-# ----------------------------
+
 
 def _run(cmd: list[str]) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
@@ -179,9 +181,6 @@ def make_audio_chunks(
     return chunks
 
 
-# ----------------------------
-# Whisper helpers
-# ----------------------------
 
 def build_model(
     model_size: str,
@@ -209,6 +208,7 @@ def transcribe_chunk(
         str(chunk_path),
         vad_filter=False,
         beam_size=5,
+        language="en",
     )
 
     segment_dicts: list[dict[str, Any]] = []
@@ -230,9 +230,6 @@ def transcribe_chunk(
     return " ".join(full_text_parts).strip(), segment_dicts
 
 
-# ----------------------------
-# Driver logic
-# ----------------------------
 
 def load_processed_videos(processed_json_path: Path) -> list[dict[str, Any]]:
     with processed_json_path.open("r", encoding="utf-8") as f:
@@ -383,6 +380,31 @@ def process_downloaded_videos(
                 print(f"Deleted audio file: {audio_path}")
 
             removed = remove_video_from_json(PROCESSED_FILE, video_id)
+            
+            load_dotenv()
+            gdrive_enabled = os.getenv("GOOGLE_DRIVE_UPLOAD_ENABLED", "false").lower() == "true"
+            gdrive_auth_mode = os.getenv("GOOGLE_DRIVE_AUTH_MODE", "oauth")
+            drive_id = os.getenv("GOOGLE_DRIVE_FOLDER_ID")
+            oauth_client_json = os.getenv("GOOGLE_DRIVE_OAUTH_CLIENT_JSON")
+            oauth_token_json = os.getenv("GOOGLE_DRIVE_OAUTH_TOKEN_JSON")
+            service_account_json = os.getenv("GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON")
+            committee_code= video.get("classification")
+
+            if gdrive_enabled:
+                try:
+                    uploaded = upload_transcript_files_to_drive(
+                        json_path=full_json_path,
+                        txt_path=full_txt_path,
+                        drive_root_folder_id=drive_id,
+                        committee_code=committee_code,
+                        auth_mode=gdrive_auth_mode,
+                        oauth_client_json_path=oauth_client_json,
+                        token_json_path=oauth_token_json,
+                        service_account_json_path=service_account_json,
+                    )
+                    print(f"Uploaded transcript files to Google Drive: {uploaded}")
+                except Exception as exc:
+                    print(f"Google Drive upload failed for{video_id}: {exc}")
         except Exception as exc:
             print(f"Database ingest failed for {full_json_path}: {exc}")
             raise
@@ -392,6 +414,207 @@ def process_downloaded_videos(
 
     print("\nDone.")
 
+
+def _build_drive_service_service_account(service_account_json_path: str | Path):
+    credentials = service_account.Credentials.from_service_account_file(
+        str(service_account_json_path),
+        scopes=DRIVE_SCOPES,
+    )
+    return build("drive", "v3", credentials=credentials)
+
+
+def _build_drive_service_oauth(
+    oauth_client_json_path: str | Path,
+    token_json_path: str | Path,
+):
+    oauth_client_json_path = Path(oauth_client_json_path)
+    token_json_path = Path(token_json_path)
+
+    creds: UserCredentials | None = None
+
+    if token_json_path.exists():
+        creds = UserCredentials.from_authorized_user_file(
+            str(token_json_path),
+            scopes=DRIVE_SCOPES,
+        )
+
+    if creds is None or not creds.valid:
+        if creds is not None and creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+        else:
+            flow = InstalledAppFlow.from_client_secrets_file(
+                str(oauth_client_json_path),
+                scopes=DRIVE_SCOPES,
+            )
+            creds = flow.run_local_server(port=0)
+
+        token_json_path.parent.mkdir(parents=True, exist_ok=True)
+        token_json_path.write_text(creds.to_json(), encoding="utf-8")
+
+    return build("drive", "v3", credentials=creds)
+
+
+def _escape_drive_query_value(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("'", "\\'")
+
+
+def _get_or_create_subfolder(
+    service,
+    parent_folder_id: str,
+    folder_name: str,
+    auth_mode: AuthMode,
+) -> str:
+    escaped_folder_name = _escape_drive_query_value(folder_name)
+
+    query = (
+        f"'{parent_folder_id}' in parents and "
+        f"name = '{escaped_folder_name}' and "
+        f"mimeType = 'application/vnd.google-apps.folder' and "
+        f"trashed = false"
+    )
+
+    list_kwargs = {
+        "q": query,
+        "fields": "files(id, name)",
+        "pageSize": 10,
+    }
+
+    if auth_mode == "service_account":
+        list_kwargs["supportsAllDrives"] = True
+        list_kwargs["includeItemsFromAllDrives"] = True
+
+    response = service.files().list(**list_kwargs).execute()
+    files = response.get("files", [])
+
+    if files:
+        return files[0]["id"]
+
+    metadata = {
+        "name": folder_name,
+        "mimeType": "application/vnd.google-apps.folder",
+        "parents": [parent_folder_id],
+    }
+
+    create_kwargs = {
+        "body": metadata,
+        "fields": "id, name",
+    }
+
+    if auth_mode == "service_account":
+        create_kwargs["supportsAllDrives"] = True
+
+    created = service.files().create(**create_kwargs).execute()
+    return created["id"]
+
+
+def _upload_one_file(
+    service,
+    file_path: Path,
+    mime_type: str,
+    drive_folder_id: str,
+    auth_mode: AuthMode,
+) -> dict[str, Any]:
+    metadata = {
+        "name": file_path.name,
+        "parents": [drive_folder_id],
+    }
+
+    media = MediaFileUpload(
+        filename=str(file_path),
+        mimetype=mime_type,
+        resumable=True,
+    )
+
+    create_kwargs = {
+        "body": metadata,
+        "media_body": media,
+        "fields": "id, name, webViewLink",
+    }
+
+    if auth_mode == "service_account":
+        create_kwargs["supportsAllDrives"] = True
+
+    created = service.files().create(**create_kwargs).execute()
+
+    return {
+        "id": created["id"],
+        "name": created["name"],
+        "webViewLink": created.get("webViewLink"),
+    }
+
+
+def upload_transcript_files_to_drive(
+    json_path: str | Path,
+    txt_path: str | Path,
+    drive_root_folder_id: str,
+    committee_code: str,
+    auth_mode: AuthMode,
+    oauth_client_json_path: str | Path | None = None,
+    token_json_path: str | Path | None = None,
+    service_account_json_path: str | Path | None = None,
+) -> dict[str, Any]:
+    json_path = Path(json_path)
+    txt_path = Path(txt_path)
+
+    if not json_path.exists():
+        raise FileNotFoundError(f"JSON file not found: {json_path}")
+    if not txt_path.exists():
+        raise FileNotFoundError(f"TXT file not found: {txt_path}")
+    if not drive_root_folder_id:
+        raise ValueError("drive_root_folder_id is required")
+    if not committee_code:
+        raise ValueError("committee_code is required")
+
+    if auth_mode == "oauth":
+        if not oauth_client_json_path:
+            raise ValueError("oauth_client_json_path is required for oauth mode")
+        if not token_json_path:
+            raise ValueError("token_json_path is required for oauth mode")
+
+        service = _build_drive_service_oauth(
+            oauth_client_json_path=oauth_client_json_path,
+            token_json_path=token_json_path,
+        )
+
+    elif auth_mode == "service_account":
+        if not service_account_json_path:
+            raise ValueError(
+                "service_account_json_path is required for service_account mode"
+            )
+
+        service = _build_drive_service_service_account(service_account_json_path)
+
+    else:
+        raise ValueError(f"Unsupported auth_mode: {auth_mode}")
+
+    committee_folder_id = _get_or_create_subfolder(
+        service=service,
+        parent_folder_id=drive_root_folder_id,
+        folder_name=committee_code,
+        auth_mode=auth_mode,
+    )
+
+    results: dict[str, dict[str, Any]] = {}
+
+    uploads = [
+        (json_path, "application/json"),
+        (txt_path, "text/plain"),
+    ]
+
+    for file_path, mime_type in uploads:
+        results[file_path.name] = _upload_one_file(
+            service=service,
+            file_path=file_path,
+            mime_type=mime_type,
+            drive_folder_id=committee_folder_id,
+            auth_mode=auth_mode,
+        )
+
+    return {
+        "committee_folder_id": committee_folder_id,
+        "committee_folder_name": committee_code,
+        "files": results,
+    }
 
 
 def sanitize_filename(title: str) -> str:

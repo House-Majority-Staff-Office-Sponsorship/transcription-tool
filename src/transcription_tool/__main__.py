@@ -1,5 +1,6 @@
 import time
 import os
+from datetime import datetime, timezone, timedelta
 from src.transcription_tool.getUploads import getNewVideos
 from src.transcription_tool.download_audio import process_pending_videos
 from src.transcription_tool.transcribe_driver import transcribe_driver
@@ -8,6 +9,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 POLL_INTERVAL_SECONDS = float(os.environ.get("POLL_INTERVAL_SECONDS"))
+
 
 def main():
     start_db()
@@ -32,8 +34,12 @@ def main():
             elapsed = time.time() - cycle_start
             sleep_seconds = max(0, POLL_INTERVAL_SECONDS - elapsed)
 
+            hawaii = timezone(timedelta(hours=-10))
+            now = datetime.now(hawaii)
+            current_time = now.strftime("%H:%M:%S")
+
             print(
-                f"Cycle finished in {elapsed:.1f}s. "
+                f"[{current_time}] Cycle finished in {elapsed:.1f}s. "
                 f"Sleeping for {sleep_seconds:.1f}s."
             )
 
