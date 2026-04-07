@@ -1,5 +1,8 @@
 import json
+import logging
 import os
+import logging
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Optional
 
@@ -13,6 +16,7 @@ STATE_FILE = DATA_DIR / Path("youtube_state.json")
 PLAYLIST_CACHE_FILE = DATA_DIR / Path("youtube_playlist_cache.json")
 PENDING_VIDEOS_FILE = DATA_DIR / Path("pending_videos.json")
 
+logger = logging.getLogger(__name__)
 
 def load_json(path: Path):
     if path.exists():
@@ -150,6 +154,7 @@ def upsert_videos_in_queue(videos: list[dict]):
     save_json(PENDING_VIDEOS_FILE, new_queue)
 
     print(f"Queue updated: {added} added, {updated} refreshed")
+    logger.info(f"Queue updated: {added} added, {updated} refreshed")
 
 
 def refresh_pending_live_videos(youtube):
@@ -173,12 +178,45 @@ def refresh_pending_live_videos(youtube):
 
     if not refresh_ids:
         print("No pending live/upcoming videos to refresh.")
+        logger.info("No pending live/upcoming videos to refresh.")
         return
 
     print(f"Refreshing {len(refresh_ids)} pending live/upcoming video(s):", refresh_ids)
 
     refreshed_items = fetch_video_metadata(youtube, refresh_ids)
     upsert_videos_in_queue(refreshed_items)
+
+def setup_logging(log_dir: str = "data/logs", log_name: str = "transcription_tool.log") -> logging.Logger:
+    log_path = Path(log_dir)
+    log_path.mkdir(parents=True, exist_ok=True)
+
+    logger = logging.getLogger("transcription_tool")
+    logger.setLevel(logging.INFO)
+
+    if logger.handlers:
+        return logger
+
+    formatter = logging.Formatter(
+        "%(asctime)s | %(levelname)s | %(name)s | %(message)s"
+    )
+
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.INFO)
+    console_handler.setFormatter(formatter)
+
+    file_handler = RotatingFileHandler(
+        log_path / log_name,
+        maxBytes=5 * 1024 * 1024,
+        backupCount=3,
+        encoding="utf-8",
+    )
+    file_handler.setLevel(logging.INFO)
+    file_handler.setFormatter(formatter)
+
+    logger.addHandler(console_handler)
+    logger.addHandler(file_handler)
+
+    return logger
 
 
 def getNewVideos():
@@ -211,10 +249,11 @@ def getNewVideos():
 
     if not new_video_ids:
         print("No new videos.")
+        logger.info("No new videos")
         return
 
     print(f"Found {len(new_video_ids)} new video(s):", new_video_ids)
-
+    logger.info(f"Found {len(new_video_ids)} new video(s):", new_video_ids)
     items = fetch_video_metadata(youtube, new_video_ids)
 
     # add new ones, and if somehow already present, refresh them in place
@@ -245,3 +284,4 @@ def getNewVideos():
     state.setdefault(channel_id, {})["last_seen_video_id"] = newest_id
     save_json(STATE_FILE, state)
     print("Updated last_seen_video_id:", newest_id)
+    logger.info("Updated last_seen_video_id:", newest_id)

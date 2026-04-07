@@ -10,7 +10,6 @@ ENV PYTHONPATH=/app/src
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
     python3-pip \
-    python3-venv \
     ffmpeg \
     ca-certificates \
   && rm -rf /var/lib/apt/lists/*
@@ -20,7 +19,5 @@ RUN python3 -m pip install --no-cache-dir --upgrade pip && \
     python3 -m pip install --no-cache-dir -r /app/requirements.txt
 
 COPY . /app
-COPY src/transcription_tool/entryPoint.sh /app/entryPoint.sh
-RUN chmod +x /app/entryPoint.sh
 
 CMD ["python3", "-m", "transcription_tool"]

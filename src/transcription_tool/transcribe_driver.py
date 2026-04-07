@@ -5,6 +5,7 @@ import json
 import shutil
 import subprocess
 import re
+import logging
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Any, Literal
@@ -25,6 +26,7 @@ try:
 except ImportError:  # pragma: no cover
     WhisperModel = None  # type: ignore
 
+logger = logging.getLogger(__name__)
 
 DATA_DIR = Path("tempdata")
 DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -257,11 +259,13 @@ def process_downloaded_videos(
 
     if not downloaded_videos:
         print("No videos with status='downloaded' were found.")
+        logger.info("No videos with status='downloaded' were found.")
         return
 
     print(f"Found {len(downloaded_videos)} downloaded video(s).")
     model = build_model(model_size=model_size, device=device, compute_type=compute_type)
     print(f"Using Whisper model with device={device}, compute_type={compute_type}, model_size={model_size}")
+    logger.info(f"Using Whisper model with device={device}, compute_type={compute_type}, model_size={model_size}")
     
     for video in downloaded_videos:
         video_id = video.get("video_id", "unknown_video")
@@ -269,6 +273,7 @@ def process_downloaded_videos(
 
         if not audio_path.exists():
             print(f"[SKIP] Missing audio file for {video_id}: {audio_path}")
+            logger.warning(f"[SKIP] Missing audio file for {video_id}: {audio_path}")
             continue
 
         video_dir = testing_dir / video_id
@@ -278,7 +283,7 @@ def process_downloaded_videos(
 
         print(f"\nProcessing {video_id}")
         print(f"Audio: {audio_path}")
-
+        logger.info(f"Processing {video_id}")
         chunks = make_audio_chunks(
             audio_path=audio_path,
             output_dir=chunks_dir,
@@ -348,8 +353,10 @@ def process_downloaded_videos(
 
         print(f"Saved transcript JSON: {full_json_path}")
         print(f"Saved transcript TXT : {full_txt_path}")
-
+        
         print("Writing to database")
+
+        logger.info("Saved json transcript, txt file, and database info")
 
         if not full_json_path.exists():
             print(f"File not found: {full_json_path}")
@@ -381,6 +388,7 @@ def process_downloaded_videos(
 
             removed = remove_video_from_json(PROCESSED_FILE, video_id)
             
+            #google drive stuff
             load_dotenv()
             gdrive_enabled = os.getenv("GOOGLE_DRIVE_UPLOAD_ENABLED", "false").lower() == "true"
             gdrive_auth_mode = os.getenv("GOOGLE_DRIVE_AUTH_MODE", "oauth")
@@ -403,10 +411,22 @@ def process_downloaded_videos(
                         service_account_json_path=service_account_json,
                     )
                     print(f"Uploaded transcript files to Google Drive: {uploaded}")
+
+                    #Used for testing so deployed hardware doesnt store final transcripts
+                    if full_json_path.exists():
+                        full_json_path.unlink()
+                        print(f"Deleted audio file: {full_json_path}")
+                    
+                    if full_txt_path.exists():
+                        full_txt_path.unlink()
+                        print(f"Deleted audio file: {full_txt_path}")
+
+
                 except Exception as exc:
                     print(f"Google Drive upload failed for{video_id}: {exc}")
         except Exception as exc:
             print(f"Database ingest failed for {full_json_path}: {exc}")
+            logger.error(f"Database ingest failed for {full_json_path}: {exc}")
             raise
 
 
