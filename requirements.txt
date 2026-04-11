@@ -8,3 +8,5 @@ nvidia-cudnn-cu12==9.*
 SQLAlchemy>=2.0
 google-auth
 google-auth-oauthlib
+fastapi
+uvicorn[standard]

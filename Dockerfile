@@ -20,4 +20,8 @@ RUN python3 -m pip install --no-cache-dir --upgrade pip && \
 
 COPY . /app
 
-CMD ["python3", "-m", "transcription_tool"]
+RUN chmod +x /app/src/transcription_tool/entryPoint.sh
+
+EXPOSE 8000
+
+CMD ["/app/src/transcription_tool/entryPoint.sh"]

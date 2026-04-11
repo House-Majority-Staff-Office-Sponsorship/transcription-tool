@@ -209,3 +209,9 @@ __marimo__/
 data/
 tempdata/
 hidden/
+
+# Secret/credential files
+client_secret*.json
+google-oauth-token.json
+service-account.json
+*.p12
