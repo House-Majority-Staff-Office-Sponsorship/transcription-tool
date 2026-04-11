@@ -1,4 +1,5 @@
 import os
+import json
 from pathlib import Path
 from collections import deque
 
@@ -21,9 +22,11 @@ def _tail(path: Path, lines: int = 200) -> list[str]:
         return list(deque(f, maxlen=lines))
 
 
-@app.get("/")
-def root(q: str = None, video_id: int = None, limit: int = 50, lines: int = 300):
-    # API mode: return JSON when ?q= is set
+@app.post("/")
+async def api(request: Request):
+    body = await request.json()
+    q = body.get("q", "")
+
     if q == "stats":
         with SessionLocal() as session:
             total = session.scalar(select(func.count(Video.id))) or 0
@@ -34,6 +37,7 @@ def root(q: str = None, video_id: int = None, limit: int = 50, lines: int = 300)
         return JSONResponse({"total": total, "completed": completed, "pending": pending})
 
     if q == "videos":
+        limit = body.get("limit", 50)
         with SessionLocal() as session:
             rows = session.scalars(
                 select(Video).order_by(Video.created_at.desc()).limit(limit)
@@ -52,7 +56,8 @@ def root(q: str = None, video_id: int = None, limit: int = 50, lines: int = 300)
                 for v in rows
             ])
 
-    if q == "video" and video_id is not None:
+    if q == "video":
+        video_id = body.get("video_id")
         with SessionLocal() as session:
             video = session.get(Video, video_id)
             if not video:
@@ -79,9 +84,14 @@ def root(q: str = None, video_id: int = None, limit: int = 50, lines: int = 300)
             })
 
     if q == "logs":
+        lines = body.get("lines", 300)
         return JSONResponse({"lines": _tail(LOG_PATH, lines)})
 
-    # Default: serve the dashboard HTML
+    return JSONResponse({"error": "unknown query"})
+
+
+@app.get("/")
+def dashboard():
     return HTMLResponse(DASHBOARD_HTML)
 
 
@@ -178,6 +188,11 @@ DASHBOARD_HTML = """\
 </div>
 
 <script>
+async function rpc(body) {
+  const r = await fetch('/', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
+  return r.json();
+}
+
 function showTab(name) {
   document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
   document.getElementById('panel-videos').style.display = name === 'videos' ? '' : 'none';
@@ -189,8 +204,7 @@ function showTab(name) {
 
 async function loadStats() {
   try {
-    const r = await fetch('/?q=stats');
-    const d = await r.json();
+    const d = await rpc({q:'stats'});
     document.getElementById('stat-total').textContent = d.total;
     document.getElementById('stat-completed').textContent = d.completed;
     document.getElementById('stat-pending').textContent = d.pending;
@@ -199,8 +213,7 @@ async function loadStats() {
 
 async function loadVideos() {
   try {
-    const r = await fetch('/?q=videos&limit=50');
-    const videos = await r.json();
+    const videos = await rpc({q:'videos', limit:50});
     const tbody = document.getElementById('videos-tbody');
     if (!videos.length) { tbody.innerHTML = '<tr><td colspan="5" style="color:#64748b;text-align:center;padding:40px;">No videos processed yet</td></tr>'; return; }
     tbody.innerHTML = videos.map(v => `<tr>
@@ -214,8 +227,7 @@ async function loadVideos() {
 }
 
 async function viewVideo(id) {
-  const r = await fetch('/?q=video&video_id=' + id);
-  const v = await r.json();
+  const v = await rpc({q:'video', video_id:id});
   document.getElementById('modal-title').textContent = v.title;
   let html = `<p style="margin-bottom:8px;color:#94a3b8;font-size:0.85rem;">YouTube ID: <a class="yt-link" href="https://youtube.com/watch?v=${v.youtube_video_id}" target="_blank">${v.youtube_video_id}</a> | Committee: ${esc(v.committee_code)} | Status: ${v.status}</p>`;
   if (v.transcripts && v.transcripts.length) {
@@ -233,8 +245,7 @@ function closeModal(e) { if (e.target === e.currentTarget) e.currentTarget.class
 
 async function loadLogs() {
   try {
-    const r = await fetch('/?q=logs&lines=300');
-    const d = await r.json();
+    const d = await rpc({q:'logs', lines:300});
     const box = document.getElementById('log-box');
     box.innerHTML = d.lines.map(l => {
       let cls = '';
