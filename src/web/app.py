@@ -22,7 +22,7 @@ def _tail(path: Path, lines: int = 200) -> list[str]:
         return list(deque(f, maxlen=lines))
 
 
-@app.get("/api/stats")
+@app.get("/_data/stats")
 def stats():
     with SessionLocal() as session:
         total = session.scalar(select(func.count(Video.id))) or 0
@@ -33,7 +33,7 @@ def stats():
     return {"total": total, "completed": completed, "pending": pending}
 
 
-@app.get("/api/videos")
+@app.get("/_data/videos")
 def list_videos(limit: int = 50, offset: int = 0):
     with SessionLocal() as session:
         rows = session.scalars(
@@ -54,7 +54,7 @@ def list_videos(limit: int = 50, offset: int = 0):
         ]
 
 
-@app.get("/api/videos/{video_id}")
+@app.get("/_data/videos/{video_id}")
 def get_video(video_id: int):
     with SessionLocal() as session:
         video = session.get(Video, video_id)
@@ -82,7 +82,7 @@ def get_video(video_id: int):
         }
 
 
-@app.get("/api/logs")
+@app.get("/_data/logs")
 def get_logs(lines: int = 200):
     return {"lines": _tail(LOG_PATH, lines)}
 
@@ -196,7 +196,7 @@ function showTab(name) {
 
 async function loadStats() {
   try {
-    const r = await fetch('/api/stats');
+    const r = await fetch('/_data/stats');
     const d = await r.json();
     document.getElementById('stat-total').textContent = d.total;
     document.getElementById('stat-completed').textContent = d.completed;
@@ -206,7 +206,7 @@ async function loadStats() {
 
 async function loadVideos() {
   try {
-    const r = await fetch('/api/videos?limit=50');
+    const r = await fetch('/_data/videos?limit=50');
     const videos = await r.json();
     const tbody = document.getElementById('videos-tbody');
     if (!videos.length) { tbody.innerHTML = '<tr><td colspan="5" style="color:#64748b;text-align:center;padding:40px;">No videos processed yet</td></tr>'; return; }
@@ -221,7 +221,7 @@ async function loadVideos() {
 }
 
 async function viewVideo(id) {
-  const r = await fetch(`/api/videos/${id}`);
+  const r = await fetch(`/_data/videos/${id}`);
   const v = await r.json();
   document.getElementById('modal-title').textContent = v.title;
   let html = `<p style="margin-bottom:8px;color:#94a3b8;font-size:0.85rem;">YouTube ID: <a class="yt-link" href="https://youtube.com/watch?v=${v.youtube_video_id}" target="_blank">${v.youtube_video_id}</a> | Committee: ${esc(v.committee_code)} | Status: ${v.status}</p>`;
@@ -240,7 +240,7 @@ function closeModal(e) { if (e.target === e.currentTarget) e.currentTarget.class
 
 async function loadLogs() {
   try {
-    const r = await fetch('/api/logs?lines=300');
+    const r = await fetch('/_data/logs?lines=300');
     const d = await r.json();
     const box = document.getElementById('log-box');
     box.innerHTML = d.lines.map(l => {
