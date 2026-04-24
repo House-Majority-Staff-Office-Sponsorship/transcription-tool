@@ -8,7 +8,13 @@ from src.db.init_db import start_db
 from dotenv import load_dotenv
 
 load_dotenv()
-POLL_INTERVAL_SECONDS = float(os.environ.get("POLL_INTERVAL_SECONDS"))
+try:
+    POLL_INTERVAL_SECONDS = float(os.environ.get("POLL_INTERVAL_SECONDS", "600"))
+except ValueError:
+    raise RuntimeError("POLL_INTERVAL_SECONDS must be a valid number")
+
+if POLL_INTERVAL_SECONDS <= 0:
+    raise RuntimeError("POLL_INTERVAL_SECONDS must be greater than 0")
 
 def main():
     start_db()
@@ -55,7 +61,6 @@ def main():
     except KeyboardInterrupt:
         print("Polling loop stopped.")
         logger.info("Polling loop stopped, exiting program")
-
 
 if __name__ == "__main__":
     main()

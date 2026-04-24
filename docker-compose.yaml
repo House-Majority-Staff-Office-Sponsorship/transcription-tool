@@ -1,0 +1,23 @@
+version: "3.9"
+
+services:
+  transcription-tool:
+    build: .
+    container_name: transcription-tool
+
+    env_file:
+      - .env
+
+    volumes:
+      - ./data:/app/data
+      - ./state:/app/state
+
+    restart: unless-stopped
+
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

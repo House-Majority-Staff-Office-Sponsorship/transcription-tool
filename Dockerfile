@@ -20,4 +20,6 @@ RUN python3 -m pip install --no-cache-dir --upgrade pip && \
 
 COPY . /app
 
+RUN mkdir -p /app/data /app/state /app/tempdata
+
 CMD ["python3", "-m", "transcription_tool"]

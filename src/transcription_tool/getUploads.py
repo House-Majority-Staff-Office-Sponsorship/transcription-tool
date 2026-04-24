@@ -12,9 +12,12 @@ from googleapiclient.discovery import build
 DATA_DIR = Path("tempdata")
 DATA_DIR.mkdir(exist_ok=True)
 
-STATE_FILE = DATA_DIR / Path("youtube_state.json")
-PLAYLIST_CACHE_FILE = DATA_DIR / Path("youtube_playlist_cache.json")
-PENDING_VIDEOS_FILE = DATA_DIR / Path("pending_videos.json")
+STATE_DIR = Path("state")
+STATE_DIR.mkdir(parents=True, exist_ok=True)
+
+STATE_FILE = STATE_DIR / Path("youtube_state.json")
+PLAYLIST_CACHE_FILE = STATE_DIR / Path("youtube_playlist_cache.json")
+PENDING_VIDEOS_FILE = STATE_DIR / Path("pending_videos.json")
 
 logger = logging.getLogger(__name__)
 

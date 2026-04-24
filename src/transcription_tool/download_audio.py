@@ -1,6 +1,6 @@
 from __future__ import annotations
-
 import json
+import logging
 import re
 import subprocess
 from pathlib import Path
@@ -8,15 +8,20 @@ from typing import Any
 
 APPROVED_COMMITTEES = {
     "CPC", "HLT", "FIN", "EEP", "HSG", "HSH", "CAA", "AGR", "WAL",
-    "JHA", "EDU", "HED", "ECD", "LAB", "PBS", "TRN", "TOU", "LMG"
+    "JHA", "EDN", "EDU", "HED", "ECD", "LAB", "PBS", "TRN", "TOU", "LMG"
 }
+
+logger = logging.getLogger(__name__)
 
 DATA_DIR = Path("tempdata")
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
-PENDING_FILE = DATA_DIR / "pending_videos.json"
-PROCESSED_FILE = DATA_DIR / "processed_videos.json"
-FAILED_FILE = DATA_DIR / "failed_downloads.json"
+STATE_DIR = Path("state")
+STATE_DIR.mkdir(parents=True, exist_ok=True)
+
+PENDING_FILE = STATE_DIR / "pending_videos.json"
+PROCESSED_FILE = STATE_DIR / "processed_videos.json"
+FAILED_FILE = STATE_DIR / "failed_downloads.json"
 AUDIO_DIR = DATA_DIR / "audio"
 
 # Setup all our directories for storing data temporaraly while videos are being processed
@@ -65,31 +70,67 @@ def normalize_title(title: str) -> str:
 def classify_title(title: str) -> dict[str, Any]:
     normalized = normalize_title(title)
     if not normalized:
+        logger.warning(f"Unclassified video was processed with title: {title}")
         return {
             "classification": "UNCLASSIFIED",
             "is_joint": False,
             "joint_committees": [],
         }
 
-    first_token = normalized.split(" ", 1)[0].upper()
+    upper_title = normalized.upper()
 
-    joint_match = re.fullmatch(r"([A-Z]{3})-([A-Z]{3})", first_token)
-    if joint_match:
-        c1, c2 = joint_match.groups()
-        if c1 in APPROVED_COMMITTEES and c2 in APPROVED_COMMITTEES:
-            return {
-                "classification": "JOINT",
-                "is_joint": True,
-                "joint_committees": [c1, c2],
-            }
-
-    if first_token in APPROVED_COMMITTEES:
+    # Special non-committee storage categories
+    if "HOUSE CHAMBER" in upper_title:
         return {
-            "classification": first_token,
+            "classification": "HC",
             "is_joint": False,
             "joint_committees": [],
         }
 
+    if "CONFERENCE" in upper_title:
+        return {
+            "classification": "CR",
+            "is_joint": False,
+            "joint_committees": [],
+        }
+
+    # The committee classifier is expected to be the first thing in the title.
+    leading_part = re.split(r"\s+-\s+|\s{2,}", normalized, maxsplit=1)[0].upper()
+
+    # Match an initial dash-separated block of 3-letter codes only.
+    # Examples:
+    #   JHA
+    #   CPC
+    #   WAL-PBS
+    #   AGR-EEP-HLT
+    match = re.match(r"^([A-Z]{3}(?:-[A-Z]{3})*)\b", leading_part)
+    if not match:
+        logger.warning(f"Unclassified video was processed with title: {title}")
+        return {
+            "classification": "UNCLASSIFIED",
+            "is_joint": False,
+            "joint_committees": [],
+        }
+
+    code_block = match.group(1)
+    codes = code_block.split("-")
+
+    # Only accept approved committee codes
+    if all(code in APPROVED_COMMITTEES for code in codes):
+        if len(codes) == 1:
+            return {
+                "classification": codes[0],
+                "is_joint": False,
+                "joint_committees": [],
+            }
+
+        return {
+            "classification": "JOINT",
+            "is_joint": True,
+            "joint_committees": codes,
+        }
+    
+    logger.warning(f"Unclassified video was processed with title: {title}")
     return {
         "classification": "UNCLASSIFIED",
         "is_joint": False,
@@ -146,7 +187,7 @@ def process_pending_videos() -> None:
             remaining_pending.append(video)
             continue
 
-        # Already handled before: remove from pending
+        # Already handled before then remove from pending
         if already_processed(video_id):
             continue
 
