@@ -169,7 +169,6 @@ Environment variables:
 | `MODEL_SIZE` | The size of the faster-whisper model | small |
 | `DEVICE` | The runtime device | cuda |
 | `COMPUTE_TYPE` | Datatype used for faster-whisper | int8 |
-| `GOOGLE_DRIVE_UPLOAD_ENABLED` | Used for internal testing | false |
 | `TRANSCRIPTION_BACKEND` | Which model is used for transcription | faster-whisper or whisperx |
 | `WHISPERX_MODEL_SIZE` | Size of the whisperx model | small |
 | `WHISPERX_COMPUTE_TYPE` | Datatype used for whisperx | float16 |
